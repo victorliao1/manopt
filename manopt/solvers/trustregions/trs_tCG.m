@@ -11,7 +11,6 @@ function [eta, Heta, print_str, stats] = trs_tCG(problem, subprobleminput, optio
 %   subprobleminput: struct storing information for this subproblemsolver
 %       x: point on the manifold problem.M
 %       grad: gradient of the cost function of the problem at x
-%       eta: starting point problem.M.zerovec(x) or small random tangent
 %       vector if options.useRand == true.
 %       Delta = trust-region radius
 %   options: structure containing options for the subproblem solver
@@ -31,6 +30,11 @@ function [eta, Heta, print_str, stats] = trs_tCG(problem, subprobleminput, optio
 %       Minimum number of inner iterations for trs_tCG.
 %   maxinner (problem.M.dim() : the manifold's dimension)
 %       Maximum number of inner iterations for trs_tCG.
+%   useRand (false)
+%       Set to true if the trust-region solve is to be initiated with a
+%       random tangent vector. If set to true, no preconditioner will be
+%       used. This option is set to true in some scenarios to escape saddle
+%       points, but is otherwise seldom activated. 
 %       
 % Outputs:
 %   eta: approximate solution to the trust-region subproblem at x
@@ -41,6 +45,7 @@ function [eta, Heta, print_str, stats] = trs_tCG(problem, subprobleminput, optio
 %   stats: structure with values to be stored in trustregions.m
 %       numinner: number of inner loops before returning
 %       hessvecevals: number of Hessian calls during execution
+%       cauchy: true if Cauchy point was used (only if useRand == true)
 %       limitedbyTR: true if a boundary solution is returned
 %
 % trs_tCG can also be called in the following way (for printing
@@ -151,25 +156,32 @@ if nargin == 3
     % trustregions.m only wants default values for stats.
     eta = [];
     Heta = [];
-    print_str = sprintf('%9s   %9s   %s', 'numinner', 'hessvec','stopreason');
-    stats = struct('numinner', 0, 'hessvecevals', 0, 'limitedbyTR', false);
+    if ~options.useRand
+        print_str = sprintf('%9s   %9s   %s', 'numinner', 'hessvec','stopreason');
+        stats = struct('numinner', 0, 'hessvecevals', 0, 'limitedbyTR', false);
+    else
+        print_str = sprintf('%9s   %9s   %11s   %s', 'numinner', 'hessvec', 'used_cauchy', 'stopreason');
+        stats = struct('numinner', 0, 'hessvecevals', 0, 'cauchy', false, 'limitedbyTR', false);
+    end
     return;
 end
 
 x = subprobleminput.x;
-eta = subprobleminput.eta;
 Delta = subprobleminput.Delta;
 grad = subprobleminput.fgradx;
 
-inner   = @(u, v) problem.M.inner(x, u, v);
-lincomb = @(a, u, b, v) problem.M.lincomb(x, a, u, b, v);
-tangent = @(u) problem.M.tangent(x, u);
+M = problem.M;
+
+inner   = @(u, v) M.inner(x, u, v);
+lincomb = @(a, u, b, v) M.lincomb(x, a, u, b, v);
+tangent = @(u) M.tangent(x, u);
 
 % Set local defaults here
 localdefaults.kappa = 0.1;
 localdefaults.theta = 1.0;
 localdefaults.mininner = 1;
-localdefaults.maxinner = problem.M.dim();
+localdefaults.maxinner = M.dim();
+localdefaults.useRand = false;
 
 % Merge local defaults with user options, if any
 if ~exist('options', 'var') || isempty(options)
@@ -184,16 +196,25 @@ kappa = options.kappa;
 % boundary (returns boundary solution). Otherwise false.
 limitedbyTR = false;
 
-if ~options.useRand % and therefore, eta == 0
-    Heta = problem.M.zerovec(x);
+% Determine eta0 and other useRand dependent initializations
+if ~options.useRand
+    % Pick the zero vector
+    eta = M.zerovec(x);
+    Heta = M.zerovec(x);
     r = grad;
     e_Pe = 0;
-else % and therefore, no preconditioner
-    % eta (presumably) ~= 0 was provided by the caller.
+else
+    % Random vector in T_x M (this has to be very small)
+    eta = M.lincomb(x, 1e-6, M.randvec(x));
+    % Must be inside trust-region
+    while M.norm(x, eta) > Delta
+        eta = M.lincomb(x, sqrt(sqrt(eps)), eta);
+    end
     Heta = getHessian(problem, x, eta, storedb, key);
     r = lincomb(1, grad, 1, Heta);
     e_Pe = inner(eta, eta);
 end
+
 r_r = inner(r, r);
 norm_r = sqrt(r_r);
 norm_r0 = norm_r;
@@ -380,7 +401,46 @@ for j = 1 : options.maxinner
     
 end  % of tCG loop
 
-print_str = sprintf('%9d   %9d   %s', j, j, stopreason_str);
+% If using randomized approach, compare result with the Cauchy point.
+% Convergence proofs assume that we achieve at least (a fraction of)
+% the reduction of the Cauchy point. After this if-block, either all
+% eta-related quantities have been changed consistently, or none of
+% them have changed.
+if options.useRand
+    used_cauchy = false;
+    
+    norm_grad = M.norm(x, grad);
+    
+    % Check the curvature,
+    Hg = getHessian(problem, x, grad, storedb, key);
+    g_Hg = M.inner(x, grad, Hg);
+    if g_Hg <= 0
+        tau_c = 1;
+    else
+        tau_c = min( norm_grad^3/(Delta*g_Hg) , 1);
+    end
+    % and generate the Cauchy point.
+    eta_c  = M.lincomb(x, -tau_c * Delta / norm_grad, grad);
+    Heta_c = M.lincomb(x, -tau_c * Delta / norm_grad, Hg);
 
+    % Now that we have computed the Cauchy point in addition to the
+    % returned eta, we might as well keep the best of them.
+    mdle  = M.inner(x, grad, eta) + .5*M.inner(x, Heta,   eta);
+    mdlec = M.inner(x, grad, eta_c) + .5*M.inner(x, Heta_c, eta_c);
+
+    if mdlec < mdle
+        eta = eta_c;
+        Heta = Heta_c; % added April 11, 2012
+        used_cauchy = true;
+    end
+end
+
+print_str = sprintf('%9d   %9d   %s', j, j, stopreason_str);
 stats = struct('numinner', j, 'hessvecevals', j, 'limitedbyTR', limitedbyTR);
+
+if options.useRand
+    stats.cauchy = used_cauchy;
+    print_str = sprintf('%9d   %9d   %11s   %s', j, j, string(used_cauchy), stopreason_str);
+end
+
 end

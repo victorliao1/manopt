@@ -11,15 +11,11 @@ function [eta, Heta, print_str, stats] = trs_tCG_cached(problem, subprobleminput
 % upon step rejection by trustregions.m compared to trs_tCG at the cost of
 % using extra memory.
 %
-% trs_tCG_cached also cannot use randomization (so options.useRand should 
-% be false).
-%
 % Inputs:
 %   problem: Manopt optimization problem structure
 %   subprobleminput: struct storing information for this subproblemsolver
 %       x: point on the manifold problem.M
 %       grad: gradient of the cost function of the problem at x
-%       eta: starting point (normally problem.M.zerovec(x))
 %       Delta = trust-region radius
 %   options: structure containing options for the subproblem solver
 %   storedb, key: caching data for problem at x
@@ -123,12 +119,10 @@ end
 if options.useRand
     warning('manopt:trs_tCG_cached:rand', ...
     [sprintf(['trs_tCG_cached does not use randomization. Did you mean to use trs_tCG?\n', ...
-                'The initial eta will be a random small vector in T_x M but this may not be desired.\n',...
                 'To silence this warning use randomization with trs_tCG or set options.useRand = false.']);]);
 end
 
 x = subprobleminput.x;
-eta = subprobleminput.eta;
 Delta = subprobleminput.Delta;
 grad = subprobleminput.fgradx;
 
@@ -164,6 +158,7 @@ limitedbyTR = false;
 theta = options.theta;
 kappa = options.kappa;
 
+eta = problem.M.zerovec(x);
 Heta = problem.M.zerovec(x);
 r = grad;
 e_Pe = 0;

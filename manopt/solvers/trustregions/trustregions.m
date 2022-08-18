@@ -69,8 +69,6 @@ function [x, cost, info, options] = trustregions(problem, x, options)
 %   limitedbyTR (boolean)
 %       true if the subproblemsolver was limited by the trust-region
 %       radius (a boundary solution was returned).
-%   cauchy (boolean)
-%       Whether the Cauchy point was used or not (if useRand is true).
 %   And possibly additional information in subproblemstats or logged by 
 %   options.statsfun.
 % For example, type [info.gradnorm] to obtain a vector of the successive
@@ -96,8 +94,9 @@ function [x, cost, info, options] = trustregions(problem, x, options)
 %       The algorithm terminates if maxiter (outer) iterations were executed.
 %   maxtime (Inf)
 %       The algorithm terminates if maxtime seconds elapsed.
-%   miniter (3)
-%       Minimum number of outer iterations (used only if useRand is true).
+%   miniter (0)
+%       Minimum number of outer iterations: this overrides all other
+%       stopping criteria.
 %   Delta_bar (problem.M.typicaldist() or sqrt(problem.M.dim()))
 %       Maximum trust-region radius. If you specify this parameter but not
 %       Delta0, then Delta0 will be set to 1/8 times this parameter.
@@ -117,12 +116,6 @@ function [x, cost, info, options] = trustregions(problem, x, options)
 %       Note that trs_gep solves the subproblem exactly which may be slow.
 %       It is included mainly for prototyping or for solving the subproblem
 %       exactly in low dimensional subspaces.
-%   useRand (false)
-%       Only used in trs_tCG.
-%       Set to true if the trust-region solve is to be initiated with a
-%       random tangent vector. If set to true, no preconditioner will be
-%       used. This option is set to true in some scenarios to escape saddle
-%       points, but is otherwise seldom activated. 
 %   rho_prime (0.1)
 %       Accept/reject threshold : if rho is at least rho_prime, the outer
 %       iteration is accepted. Otherwise, it is rejected. In case it is
@@ -304,8 +297,11 @@ function [x, cost, info, options] = trustregions(problem, x, options)
 %       Added support for options.hook.
 %
 %   VL August 17, 2022:
-%       Refactored code to use various subproblem solvers, and
-%       modify printing structure.
+%       Refactored code to use various subproblem solvers with a new input 
+%       output pattern. Modified how information about iterations is 
+%       printed to accomodate new subproblem solvers. Moved all useRand and
+%       cauchy logic to trs_tCG.
+
 
 % Verify that the problem description is sufficient for the solver.
 
@@ -336,10 +332,9 @@ end
 % Set local defaults here
 localdefaults.verbosity = 2;
 localdefaults.maxtime = inf;
-localdefaults.miniter = 3;
+localdefaults.miniter = 0;
 localdefaults.maxiter = 1000;
 localdefaults.rho_prime = 0.1;
-localdefaults.useRand = false;
 localdefaults.rho_regularization = 1e3;
 localdefaults.subproblemsolver = @trs_tCG_cached;
 localdefaults.tolgradnorm = 1e-6;
@@ -408,11 +403,6 @@ norm_grad = M.norm(x, fgradx);
 % Initialize trust-region radius
 Delta = options.Delta0;
 
-% Save stats in a struct array info, and preallocate.
-if ~exist('used_cauchy', 'var')
-    used_cauchy = [];
-end
-
 % get default output structure for logging purposes
 [~,~,print_header,subproblemstats] = options.subproblemsolver([], [], options);
 
@@ -470,11 +460,8 @@ while true
     % Run standard stopping criterion checks
     [stop, reason] = stoppingcriterion(problem, x, options, info, k+1);
     
-    % If the stopping criterion that triggered is the tolerance on the
-    % gradient norm but we are using randomization, make sure we make at
-    % least miniter iterations to give randomization a chance at escaping
-    % saddle points.
-    if stop == 2 && options.useRand && k < options.miniter
+    % Ensure trustregions runs at least options.miniter iterations
+    if k < options.miniter
         stop = 0;
     end
     
@@ -493,60 +480,15 @@ while true
     % ** Begin TR Subproblem **
     % *************************
   
-    % Determine eta0
-    if ~options.useRand
-        % Pick the zero vector
-        eta = M.zerovec(x);
-    else
-        % Random vector in T_x M (this has to be very small)
-        eta = M.lincomb(x, 1e-6, M.randvec(x));
-        % Must be inside trust-region
-        while M.norm(x, eta) > Delta
-            eta = M.lincomb(x, sqrt(sqrt(eps)), eta);
-        end
-    end
-
     % Solve TR subproblem with solver specified by options.subproblemsolver
-    subprobleminput = struct('x', x, 'fgradx', fgradx, 'eta', eta, ...
+    subprobleminput = struct('x', x, 'fgradx', fgradx, ...
                             'Delta', Delta, 'accept', accept);
 
     [eta, Heta, subproblem_str, subproblemstats] = options.subproblemsolver(problem, subprobleminput, ...
                                 options, storedb, key);
 
     limitedbyTR = subproblemstats.limitedbyTR;
-
-    % If using randomized approach, compare result with the Cauchy point.
-    % Convergence proofs assume that we achieve at least (a fraction of)
-    % the reduction of the Cauchy point. After this if-block, either all
-    % eta-related quantities have been changed consistently, or none of
-    % them have changed.
-    if options.useRand
-        used_cauchy = false;
-        % Check the curvature,
-        Hg = getHessian(problem, x, fgradx, storedb, key);
-        g_Hg = M.inner(x, fgradx, Hg);
-        if g_Hg <= 0
-            tau_c = 1;
-        else
-            tau_c = min( norm_grad^3/(Delta*g_Hg) , 1);
-        end
-        % and generate the Cauchy point.
-        eta_c  = M.lincomb(x, -tau_c * Delta / norm_grad, fgradx);
-        Heta_c = M.lincomb(x, -tau_c * Delta / norm_grad, Hg);
-
-        % Now that we have computed the Cauchy point in addition to the
-        % returned eta, we might as well keep the best of them.
-        mdle  = fx + M.inner(x, fgradx, eta) + .5*M.inner(x, Heta,   eta);
-        mdlec = fx + M.inner(x, fgradx, eta_c) + .5*M.inner(x, Heta_c, eta_c);
-
-        if mdlec < mdle
-            eta = eta_c;
-            Heta = Heta_c; % added April 11, 2012
-            used_cauchy = true;
-        end
-    end
-    
-    
+        
     % This is computed for logging purposes and may be useful for some
     % user-defined stopping criteria.
     norm_eta = M.norm(x, eta);
@@ -754,7 +696,7 @@ while true
     % Everything after this in the loop is not accounted for in the timing.
     stats = savestats(problem, x, storedb, key, options, k, fx, ...
                       norm_grad, Delta, ticstart, subproblemstats, info, rho, rhonum, ...
-                      rhoden, accept, norm_eta, used_cauchy);
+                      rhoden, accept, norm_eta);
     info(k+1) = stats;
 
     % ** Display:
@@ -763,9 +705,6 @@ while true
         '%+.16e   %12e   %s\n'], ...
         accstr,trstr,k,fx,norm_grad,subproblem_str);
     elseif options.verbosity > 2
-        if options.useRand && used_cauchy
-            fprintf('USED CAUCHY POINT\n');
-        end
         fprintf(['%3s %3s   %5d   ', ...
         '%+.16e   %.6e   %+.6e   %+.6e   %.6e   %s\n'], ...
         accstr,trstr,k,fx,norm_grad,rho, rho_noreg, Delta, subproblem_str);
@@ -805,7 +744,7 @@ end
 % Routine in charge of collecting the current iteration stats
 function stats = savestats(problem, x, storedb, key, options, k, fx, ...
                            norm_grad, Delta, ticstart, subproblemstats, info, rho, rhonum, ...
-                           rhoden, accept, norm_eta, used_cauchy)
+                           rhoden, accept, norm_eta)
     stats.iter = k;
     stats.cost = fx;
     stats.gradnorm = norm_grad;
@@ -817,9 +756,6 @@ function stats = savestats(problem, x, storedb, key, options, k, fx, ...
         stats.rhoden = NaN;
         stats.accepted = true;
         stats.stepsize = NaN;
-        if options.useRand
-            stats.cauchy = false;
-        end
         fields = fieldnames(subproblemstats);
         for i = 1 : length(fields)
             stats.(fields{i}) = subproblemstats.(fields{i});
@@ -831,9 +767,6 @@ function stats = savestats(problem, x, storedb, key, options, k, fx, ...
         stats.rhoden = rhoden;
         stats.accepted = accept;
         stats.stepsize = norm_eta;
-        if options.useRand
-          stats.cauchy = used_cauchy;
-        end
         fields = fieldnames(subproblemstats);
         for i = 1 : length(fields)
             stats.(fields{i}) = subproblemstats.(fields{i});
