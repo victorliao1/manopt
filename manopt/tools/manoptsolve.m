@@ -1,4 +1,4 @@
-function [x, cost, info, options] = manoptsolve(problem, x0, options)
+function [x, cost, info, options, time] = manoptsolve(problem, x0, options)
 % Gateway helper function to call a Manopt solver, chosen in the options.
 %
 % function [x, cost, info, options] = manoptsolve(problem)
@@ -47,8 +47,14 @@ function [x, cost, info, options] = manoptsolve(problem, x0, options)
     if ~exist('x0', 'var')
         x0 = [];
     end
-    
+    f = @() options.solver(problem, x0, options);
     % Issue the actual call.
     [x, cost, info, options] = options.solver(problem, x0, options);
-    
+%     time = timeit(f);
+    time = 1;
+    if ~isfield(info, 'memorytCG_MB')
+        for i=1:length(info)
+            info(i).memorytCG_MB = 0;
+        end
+    end
 end

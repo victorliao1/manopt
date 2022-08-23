@@ -1,4 +1,4 @@
-function [Y, problem, S] = elliptope_SDP(A, p, Y0)
+function [problem] = elliptope_SDP(gg, A, p, Y0)
 % Solver for semidefinite programs (SDP's) with unit diagonal constraints.
 % 
 % function [Y, problem, S] = elliptope_SDP(A)
@@ -63,7 +63,7 @@ function [Y, problem, S] = elliptope_SDP(A, p, Y0)
     % If no inputs are provided, since this is an example file, generate
     % a random Erdos-Renyi graph. This is for illustration purposes only.
     if ~exist('A', 'var') || isempty(A)
-        n = 100;
+        n = gg;
         A = triu(rand(n) <= .1, 1);
         A = (A+A.')/(2*n);
     end
@@ -87,7 +87,7 @@ function [Y, problem, S] = elliptope_SDP(A, p, Y0)
     manifold = obliquefactory(p, n, true);
     
     problem.M = manifold;
-    
+    problem.name = 'elliptope_SDP';
     
     % These three, quick commented lines of code are sufficient to define
     % the cost function and its derivatives. This is good code to write
@@ -121,6 +121,7 @@ function [Y, problem, S] = elliptope_SDP(A, p, Y0)
     function [G, store] = grad(Y, store)
         store = prepare(Y, store);
         G = store.AY - bsxfun(@times, Y, store.diagAYYt);
+        store = incrementcounter(store, 'gradhesscalls');
     end
 
     % If you want to, you can specify the Riemannian Hessian as well.
@@ -129,6 +130,8 @@ function [Y, problem, S] = elliptope_SDP(A, p, Y0)
         store = prepare(Y, store);
         SYdot = A*Ydot - bsxfun(@times, Ydot, store.diagAYYt);
         H = manifold.proj(Y, SYdot);
+        store = incrementcounter(store, 'hesscalls');
+        store = incrementcounter(store, 'gradhesscalls');
     end
 
     % An alternative way to compute the gradient and the hessian is to use 
@@ -143,21 +146,21 @@ function [Y, problem, S] = elliptope_SDP(A, p, Y0)
     % call manoptAD to prepare AD for the problem structure
     % problem = manoptAD(problem);
 
-    % If no initial guess is available, tell Manopt to use a random one.
-    if ~exist('Y0', 'var') || isempty(Y0)
-        Y0 = [];
-    end
+%     % If no initial guess is available, tell Manopt to use a random one.
+%     if ~exist('Y0', 'var') || isempty(Y0)
+%         Y0 = [];
+%     end
 
-    % Call your favorite solver.
-    opts = struct();
-    opts.verbosity = 0;      % Set to 0 for no output, 2 for normal output
-    opts.maxinner = 500;     % maximum Hessian calls per iteration
-    opts.tolgradnorm = 1e-6; % tolerance on gradient norm
-    Y = trustregions(problem, Y0, opts);
-    
-    % If required, produce an optimality certificate.
-    if nargout >= 3
-        S = A - spdiags(sum((A*Y).*Y, 2), 0, n, n);
-    end
+%     % Call your favorite solver.
+%     opts = struct();
+%     opts.verbosity = 2;      % Set to 0 for no output, 2 for normal output
+%     opts.maxinner = 500;     % maximum Hessian calls per iteration
+%     opts.tolgradnorm = 1e-6; % tolerance on gradient norm
+%     Y = trustregions(problem, Y0, opts);
+%     
+%     % If required, produce an optimality certificate.
+%     if nargout >= 3
+%         S = A - spdiags(sum((A*Y).*Y, 2), 0, n, n);
+%     end
 
 end
