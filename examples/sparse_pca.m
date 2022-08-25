@@ -1,4 +1,4 @@
-function [Z, P, X, A] = sparse_pca(A, m, gamma)
+function [Z, P, X] = sparse_pca(A, m, gamma)
 % Sparse principal component analysis based on optimization over Stiefel.
 %
 % [Z, P, X] = sparse_pca(A, m, gamma)
@@ -67,11 +67,9 @@ function [Z, P, X, A] = sparse_pca(A, m, gamma)
     end
     
     % Execute the main algorithm: it will compute a sparsity pattern P.
-    [P, X] = sparse_pca_stiefel_l1(A, m, gamma);
-    
-    % Compute the principal components in accordance with the sparsity.
-    Z = postprocess(A, P, X);
+    [X, P] = sparse_pca_stiefel_l1(A, m, gamma);
 
+    Z = postprocess(A, P, X);
 end
 
 
@@ -79,7 +77,7 @@ end
 % featured in the reference paper by Journee et al. This is not the same
 % algorithm but it is the same cost function optimized over the same search
 % space. We force N = eye(m).
-function [P, X] = sparse_pca_stiefel_l1(A, m, gamma)
+function [X, P] = sparse_pca_stiefel_l1(A, m, gamma)
     
     [p, n] = size(A); %#ok<NASGU>
 
@@ -124,6 +122,7 @@ function [P, X] = sparse_pca_stiefel_l1(A, m, gamma)
             store.G = -A*factor;
         end
         G = store.G;
+        store = incrementcounter(store, 'gradhesscalls');
     end
 
     % An alternative way to compute the egrad is to use automatic
@@ -147,8 +146,10 @@ function [P, X] = sparse_pca_stiefel_l1(A, m, gamma)
     % The optimization happens here. To improve the method, it may be
     % interesting to investigate better-than-random initial iterates and,
     % possibly, to fine tune the parameters of the solver.
-    X = trustregions(problem);
-
+    x = problem.M.rand();
+    X = trustregions(problem, x);
+    opts.subproblemsolver = @trs_lanczos;
+    X = trustregions(problem, x, opts);
     % Compute the sparsity pattern by thresholding
     P = abs(A'*X) > gamma;
     

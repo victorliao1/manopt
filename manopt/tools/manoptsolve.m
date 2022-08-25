@@ -49,7 +49,7 @@ function [x, cost, info, options] = manoptsolve(problem, x0, options)
     end
 
     % Issue the actual call.
-    [x, cost, info, options] = options.solver(problem, x0, options);
+%     [x, cost, info, options] = options.solver(problem, x0, options);
     [x, cost, info, options] = options.solver(problem, x0, options);
     if ~isfield(info, 'memorytCG_MB')
         for i=1:length(info)
