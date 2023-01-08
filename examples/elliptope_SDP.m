@@ -154,10 +154,8 @@ function [Y, problem, S] = elliptope_SDP(A, p, Y0)
     opts.maxinner = 500;     % maximum Hessian calls per iteration
     opts.tolgradnorm = 1e-6; % tolerance on gradient norm
     Y0 = problem.M.rand();
-    Y = trustregions(problem, Y0, opts);
     opts.subproblemsolver = @trs_lanczos;
     Y = trustregions(problem, Y0, opts);
-    
     % If required, produce an optimality certificate.
     if nargout >= 3
         S = A - spdiags(sum((A*Y).*Y, 2), 0, n, n);

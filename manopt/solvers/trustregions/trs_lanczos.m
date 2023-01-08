@@ -65,16 +65,12 @@ Heta = M.zerovec(x);
 r = grad;
 e_Pe = 0;
 
-r_r = inner(r, r);
-norm_r = sqrt(r_r);
-norm_r0 = norm_r;
-
 % Precondition the residual.
 z = getPrecon(problem, x, r, storedb, key);
 
 % Compute z'*r.
 z_r = inner(z, r);
-norm_r0 = z_r;
+z_r0 = z_r;
 
 gamma_0 = sqrt(z_r);
 gamma = gamma_0;
@@ -106,6 +102,7 @@ model_fun = @(eta, Heta) inner(eta, grad) + .5*inner(eta, Heta);
 model_fun_h = @(h, Hh, g) dot(h,g) + .5* dot(h, Hh);
 
 model_value = 0;
+true_model_value = 0;
 
 first_newton_complete = false;
 % Pre-assume termination because j == end.
@@ -171,7 +168,6 @@ for j = 1 : min(options.maxinner, n) - 1
         new_model_value = model_fun(new_eta, new_Heta);
         if new_model_value >= model_value
             stopreason_str = 'model increased CG';
-            model_increased = true;
             break;
         end
         
@@ -179,21 +175,19 @@ for j = 1 : min(options.maxinner, n) - 1
         Heta = new_Heta;
         model_value = new_model_value; %% added Feb. 17, 2015
     else
-        [new_h, newton_iter] = minimize_quadratic_newton(T(1:j, 1:j), ...
-                                 gamma_0*eye(j, 1), Delta, options);
-        
+%         [new_h, newton_iter,~,status] = minimize_quadratic_newton(T(1:j, 1:j), ...
+%                                  gamma_0*eye(j, 1), Delta, options);
+        [new_h, limitedbyTR] = TRSgep(T(1:j, 1:j), gamma_0*eye(j, 1), Delta);
+%         Heta_vec = T(1:j, 1:j)*eta_vec;
         new_Hh = T(1:j, 1:j)*new_h;
         new_model_value = model_fun_h(new_h, new_Hh, gamma_0*eye(j, 1));
-        if new_model_value >= model_value
-            stopreason_str = 'model increased lanczos';
-            model_increased = true;
-            break;
-        end
-        ee = tangent(lincomb(M, x, Q(1:numel(new_h)), new_h));
-        Hee = getHessian(problem, x, ee, storedb, key);
-        mod_val_orig = model_fun(ee, Hee);
-%         disp(abs(new_model_value - mod_val_orig));
-        newton_iterations(j) = newton_iter;
+%         true_new_model_value = model_fun_h(eta_vec, Heta_vec, gamma_0*eye(j, 1));
+%         if abs(true_new_model_value - new_model_value) > 1e-8
+%             disp(status);
+%             disp('gg');
+%         end
+
+%         newton_iterations(j) = newton_iter;
         h = new_h;
         first_newton_complete = true;
         model_value = new_model_value; %% added Feb. 17, 2015
@@ -201,10 +195,6 @@ for j = 1 : min(options.maxinner, n) - 1
     
     % Update the residual.
     r = M.lincomb(x, 1, r, -alpha, Hmdelta);
-    
-    % Compute new norm of r.
-    r_r = inner(r, r);
-    norm_r = sqrt(r_r);
 
     % Precondition the residual.
     z = getPrecon(problem, x, r, storedb, key);
@@ -218,24 +208,22 @@ for j = 1 : min(options.maxinner, n) - 1
     beta = z_r/zold_rold;
     prevalpha = alpha;
 
-    gamma = sqrt(beta)/abs(prevalpha);
-
     % Check kappa/theta stopping criterion.
     % Note that it is somewhat arbitrary whether to check this stopping
     % criterion on the r's (the gradients) or on the z's (the
     % preconditioned gradients). [CGT2000], page 206, mentions both as
     % acceptable criteria.
     if j >= options.mininner
-        if interior && z_r <= norm_r0*min(norm_r0^theta, kappa)
+        if interior && z_r <= z_r0*min(z_r0^theta, kappa)
             % Residual is small enough to quit
-            if kappa < norm_r0^theta
+            if kappa < z_r0^theta
                 stopreason_str = 'reached target residual-kappa (linear)';
             else
                 stopreason_str = 'reached target residual-theta (superlinear)';
             end
             break;  
-        elseif ~interior && (gamma * abs(h(j))) < norm_r0*min(norm_r0^theta, kappa)
-            if kappa < norm_r0^theta
+        elseif ~interior && (gamma * abs(h(j))) < z_r0*min(z_r0^theta, kappa)
+            if kappa < z_r0^theta
                 stopreason_str = 'lanczos reached target residual-kappa (linear)';
             else
                 stopreason_str = 'lanczos reached target residual-theta (superlinear)';
@@ -243,6 +231,9 @@ for j = 1 : min(options.maxinner, n) - 1
             break;
         end
     end
+
+    gamma = sqrt(beta)/abs(prevalpha);
+
     % Compute new search direction.
     mdelta = M.lincomb(x, 1, z, beta, mdelta);
     
@@ -276,11 +267,6 @@ eta = tangent(eta);
 % linear combination of available vectors. For now at least, we favor
 % this numerically safer approach.
 Heta = getHessian(problem, x, eta, storedb, key);
-% new_model_value = model_fun(eta, Heta);
-% if new_model_value >= model_value
-%     stopreason_str = 'model increased CG 2';
-%     model_increased = true;
-% end
 
 print_str = sprintf('%9d   %9d   %s', j, j, stopreason_str);
 

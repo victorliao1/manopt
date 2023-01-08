@@ -27,10 +27,10 @@ function [s, iter, lambda, status] = minimize_quadratic_newton(H, g, Delta, opti
     snorm = norm(s);
     if snorm <= Delta
         if ~(lambda == 0) && ~(snorm == Delta)
-            alpha = max(real(roots([snorm, 2* eigenvec_min.*s, norm(eigenvec_min)-Delta^2])));
+            alpha = max(real(roots([norm(eigenvec_min)^2, 2* eigenvec_min.*s, snorm^2-Delta^2])));
             s = s + alpha * eigenvec_min;
         end
-        
+        status = 2;
         return;
     end
     
@@ -45,7 +45,7 @@ function [s, iter, lambda, status] = minimize_quadratic_newton(H, g, Delta, opti
         norm_del_diff = snorm - Delta;
 
         % Check if it is close enough to zero to stop.
-        if abs(snorm - Delta) <= options.tol_newton*Delta
+        if abs(norm_del_diff) <= options.tol_newton*Delta
             status = 0;
             return;
         end
